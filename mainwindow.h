@@ -22,6 +22,7 @@ private slots:
 private:
     Ui::MainWindow *ui;
     QTimer *updateTimer;
+    long long sizeLimit;
     void  refreshData();
 };
 #endif // MAINWINDOW_H
