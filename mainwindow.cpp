@@ -50,19 +50,45 @@ void MainWindow::on_pushButton_clicked()
 void MainWindow::refreshData()
 {
     if (QSqlDatabase::database().isOpen()) {
-        QSqlQuery query("SELECT datname, usename, pg_size_pretty(pg_database_size(datname)), "
-                        "datallowconn, pg_database_size(datname) "
-                        "FROM pg_database JOIN pg_user ON datdba=usesysid");
+
+        QSqlQuery queryVer("SELECT VERSION()");
+        if (queryVer.next()) {
+            QString ver = queryVer.value(0).toString().section(' ', 0, 1);
+            ui->labelVersion->setText("DBMS Version:\n" + ver);
+        }
+
+        QSqlQuery queryUptime("SELECT current_timestamp - pg_postmaster_start_time()");
+        if (queryUptime.next()) {
+            ui->labelUptime->setText("Uptime:\n" + queryUptime.value(0).toString().section('.', 0, 0));
+        }
+
+        QSqlQuery queryTotalSize("SELECT pg_size_pretty(sum(pg_database_size(datname))) FROM pg_database");
+        if (queryTotalSize.next()) {
+            ui->labelTotalSize->setText("Overall volume:\n" + queryTotalSize.value(0).toString());
+        }
+
+        QSqlQuery queryTotalConns("SELECT count(*) FROM pg_stat_activity");
+        if (queryTotalConns.next()) {
+            ui->labelTotalConns->setText("Total sessions:\n" + queryTotalConns.value(0).toString());
+        }
+
+        QSqlQuery query("SELECT d.datname, u.usename, "
+                        "pg_size_pretty(pg_database_size(d.datname)), "
+                        "d.datallowconn, "
+                        "pg_database_size(d.datname), "
+                        "(SELECT count(*) FROM pg_stat_activity WHERE datname = d.datname) "
+                        "FROM pg_database d JOIN pg_user u ON d.datdba = u.usesysid");
 
         QStandardItemModel *model = new QStandardItemModel(this);
 
-        model->setHorizontalHeaderLabels({"Base name", "Owner", "Size on disk", "Access"});
+        model->setHorizontalHeaderLabels({"Base name", "Owner", "Size on disk", "Access", "Active Users"});
 
         while (query.next()) {
             QString name = query.value(0).toString();
             QString owner = query.value(1).toString();
             QString sizePretty = query.value(2).toString();
             QString access = query.value(3).toBool() ? "Allowed" : "Forbidden";
+            QString activeUsers = query.value(5).toString();
 
             long long sizeInBytes = query.value(4).toLongLong();
 
@@ -71,6 +97,7 @@ void MainWindow::refreshData()
             rowItems << new QStandardItem(owner);
             rowItems << new QStandardItem(sizePretty);
             rowItems << new QStandardItem(access);
+            rowItems << new QStandardItem(activeUsers);
 
             if (sizeInBytes > this->sizeLimit) { // 52428800 кб = 50 мб
                 for (auto item : rowItems) {
