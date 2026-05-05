@@ -20,6 +20,7 @@ SOURCES += \
     mainwindow.cpp
 
 HEADERS += \
+    db_analizer.h \
     mainwindow.h
 
 FORMS += \
@@ -32,4 +33,5 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 DISTFILES += \
     .gitignore \
-    config.ini
+    config.ini \
+    load_manager.sh
