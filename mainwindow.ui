@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1106</width>
-    <height>740</height>
+    <width>1141</width>
+    <height>784</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -15,6 +15,13 @@
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QGridLayout" name="gridLayout">
+    <item row="12" column="0">
+     <widget class="QProgressBar" name="barRead">
+      <property name="value">
+       <number>24</number>
+      </property>
+     </widget>
+    </item>
     <item row="0" column="0">
      <widget class="QPushButton" name="pushButton">
       <property name="text">
@@ -128,14 +135,14 @@
       </property>
      </widget>
     </item>
-    <item row="4" column="0">
+    <item row="6" column="0">
      <widget class="QPushButton" name="exportButton">
       <property name="text">
-       <string>Сформировать отчет</string>
+       <string>Сформировать текстовый отчет</string>
       </property>
      </widget>
     </item>
-    <item row="7" column="0">
+    <item row="14" column="0">
      <widget class="QTextEdit" name="expertLog">
       <property name="sizePolicy">
        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
@@ -148,17 +155,38 @@
       </property>
      </widget>
     </item>
-    <item row="5" column="0">
+    <item row="9" column="0">
      <widget class="QPushButton" name="badgerButton">
       <property name="text">
        <string>Сгенерировать глубокий отчет</string>
       </property>
      </widget>
     </item>
-    <item row="6" column="0">
+    <item row="11" column="0">
      <widget class="QPushButton" name="launchButton">
       <property name="text">
        <string>Генерация тестовой нагрузки</string>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="0">
+     <widget class="QPushButton" name="exportToPdfButton">
+      <property name="text">
+       <string>Сфромировать PDF-отчет</string>
+      </property>
+     </widget>
+    </item>
+    <item row="10" column="0">
+     <widget class="QPushButton" name="aiAnalysisButton">
+      <property name="text">
+       <string>Интеллектуальный ИИ-анализ</string>
+      </property>
+     </widget>
+    </item>
+    <item row="13" column="0">
+     <widget class="QProgressBar" name="barWrite">
+      <property name="value">
+       <number>24</number>
       </property>
      </widget>
     </item>
@@ -169,7 +197,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1106</width>
+     <width>1141</width>
      <height>23</height>
     </rect>
    </property>

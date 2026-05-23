@@ -16,8 +16,14 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QStandardPaths>
-#include <QProcess>
 #include <QDir>
+#include <QPdfWriter>
+#include <QPainter>
+#include <QFileDialog>
+#include <QTextDocument>
+#include <QDialog>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -28,21 +34,22 @@ MainWindow::MainWindow(QWidget *parent)
     this->setWindowTitle("Система мониторинга PostgreSQL");
 
     ui->tableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
-
     ui->tableView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-
     ui->tableView->setMaximumSize(QSize(16777215, 16777215));
-
     ui->tableView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     updateTimer = new QTimer(this);
     connect(updateTimer, &QTimer::timeout, this, &MainWindow::refreshData);
 
+    networkManager = new QNetworkAccessManager(this);
+    connect(networkManager, &QNetworkAccessManager::finished, this, &MainWindow::onAiReplyFinished);
+
     QString fullLegend = "ОПИСАНИЕ ЦВЕТОВОЙ ИНДИКАЦИИ:\n\n"
-                             "● БЕЛЫЙ: База данных в пределах нормы.\n"
-                             "● КРАСНЫЙ: Критический объем данных (превышен лимит в config.ini).\n"
-                             "● ТЕКСТ ЗЕЛЕНЫЙ: Высокая эффективность кэша (>95%).\n"
-                             "● ТЕКСТ ОРАНЖЕВЫЙ: Проблемы с производительностью (низкий кэш/высокие откаты).";
+                         "● БЕЛЫЙ: База данных в пределах нормы.\n"
+                         "● СЕРЫЙ: Доступ к базе запрещен (datallowconn = false).\n"
+                         "● КРАСНЫЙ: Критический объем данных (превышен лимит).\n"
+                         "● ТЕКСТ ЗЕЛЕНЫЙ: Высокая эффективность кэша.\n"
+                         "● ТЕКСТ ОРАНЖЕВЫЙ: Проблемы с производительностью.";
 
     ui->tableView->setToolTip(fullLegend);
     ui->statusbar->setToolTip(fullLegend);
@@ -53,9 +60,21 @@ MainWindow::MainWindow(QWidget *parent)
     ui->expertLog->setMaximumHeight(100);
     ui->expertLog->setStyleSheet("background-color: #f0f0f0; color: #333; font-family: Consolas;");
 
+
+    ui->barRead->setStyleSheet(
+                "QProgressBar { border: 1px solid #bdc3c7; border-radius: 4px; text-align: center; font-weight: bold; color: #2c3e50; }"
+                "QProgressBar::chunk { background-color: #3498db; border-radius: 3px; }"
+                );
+    ui->barWrite->setStyleSheet(
+                "QProgressBar { border: 1px solid #bdc3c7; border-radius: 4px; text-align: center; font-weight: bold; color: #2c3e50; }"
+                "QProgressBar::chunk { background-color: #e74c3c; border-radius: 3px; }"
+                );
 }
 
-MainWindow::~MainWindow() { delete ui; }
+MainWindow::~MainWindow()
+{
+    delete ui;
+}
 
 void MainWindow::on_pushButton_clicked()
 {
@@ -66,8 +85,7 @@ void MainWindow::on_pushButton_clicked()
         if (QFile::exists(sourcePath)) {
             configPath = sourcePath;
         } else {
-            QMessageBox::critical(this, "Ошибка",
-                "Файл конфигурации не найден!\nПуть: " + qApp->applicationDirPath());
+            QMessageBox::critical(this, "Ошибка", "Файл конфигурации не найден!\nПуть: " + qApp->applicationDirPath());
             return;
         }
     }
@@ -85,18 +103,16 @@ void MainWindow::on_pushButton_clicked()
     this->cacheBorder = settings.value("borders/min_cache_hit_ratio", 95.0).toDouble();
 
     if (db.open()) {
-            qDebug() << "Успешное подключение к БД!"; // Увидим в консоли Qt Creator
-            refreshData();
-            updateTimer->start(5000);
-            ui->pushButton->setText("Мониторинг запущен...");
-            ui->pushButton->setEnabled(false);
-        } else {
-            qDebug() << "ОШИБКА ПОДКЛЮЧЕНИЯ:" << db.lastError().text();
-            qDebug() << "Доступные драйверы:" << QSqlDatabase::drivers();
-            QMessageBox::critical(this, "Ошибка подключения",
-                                 "Сообщение от системы: " + db.lastError().text());
-        }
-
+        qDebug() << "Успешное подключение к БД!";
+        refreshData();
+        updateTimer->start(5000);
+        ui->pushButton->setText("Мониторинг запущен...");
+        ui->pushButton->setEnabled(false);
+    } else {
+        qDebug() << "ОШИБКА ПОДКЛЮЧЕНИЯ:" << db.lastError().text();
+        qDebug() << "Доступные драйверы:" << QSqlDatabase::drivers();
+        QMessageBox::critical(this, "Ошибка подключения", "Сообщение от системы: " + db.lastError().text());
+    }
 }
 
 void MainWindow::on_exportButton_clicked()
@@ -133,10 +149,8 @@ void MainWindow::on_exportButton_clicked()
 
         ui->statusbar->showMessage(QString::fromUtf8("Отчет сохранен в Документы"), 5000);
         QDesktopServices::openUrl(QUrl::fromLocalFile(reportPath));
-
     } else {
-        QMessageBox::critical(this, QString::fromUtf8("Ошибка"),
-            QString::fromUtf8("Не удалось создать файл отчета!"));
+        QMessageBox::critical(this, QString::fromUtf8("Ошибка"), QString::fromUtf8("Не удалось создать файл отчета!"));
     }
 }
 
@@ -180,7 +194,6 @@ void MainWindow::on_badgerButton_clicked()
     }
 
     args << "-j" << "4";
-
     args << logPath << "-o" << outputPath;
 
     ui->statusbar->showMessage("Запуск pgBadger (фильтрация по правам)...");
@@ -192,10 +205,7 @@ void MainWindow::on_badgerButton_clicked()
             ui->statusbar->showMessage("Глубокий отчет готов!");
         } else {
             QString errorOutput = process->readAllStandardError();
-            // Теперь здесь не будет кода 3 из-за diplom_restricted
-            QMessageBox::critical(this, "Ошибка выполнения",
-                "Код выхода: " + QString::number(exitCode) + "\n" +
-                "Ошибка системы: " + errorOutput);
+            QMessageBox::critical(this, "Ошибка выполнения", "Код выхода: " + QString::number(exitCode) + "\n" + "Ошибка системы: " + errorOutput);
         }
     });
 
@@ -235,8 +245,7 @@ void MainWindow::logEvent(QString message, QString context)
 
     if (logFile.open(QIODevice::Append | QIODevice::Text)) {
         QTextStream out(&logFile);
-        out << QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss")
-            << " | " << message;
+        out << QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss") << " | " << message;
         if (!context.isEmpty()) {
             out << " | КОНТЕКСТ: " << context;
         }
@@ -410,20 +419,38 @@ void MainWindow::refreshData()
         ui->tableView->setModel(model);
         ui->tableView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
 
-        qint64 elapsed = timer.elapsed();
-        this->setWindowTitle("Система мониторинга PostgreSQL");
+        static qint64 prevReturned = 0;
+        static qint64 prevModified = 0;
 
-        QString statusMessage = QString("Статус: Мониторинг активен | Отклик: %1 мс | Сессий: %2 | Нагрузка: %3 TPS")
-                                    .arg(elapsed)
-                                    .arg(currentConns)
-                                    .arg(currentTps, 0, 'f', 1);
+        QSqlQuery queryProfile(
+            "SELECT sum(tup_returned), "
+            "sum(tup_inserted + tup_updated + tup_deleted) "
+            "FROM pg_stat_database"
+        );
 
-        ui->statusbar->showMessage(statusMessage);
+        if (queryProfile.next()) {
+            qint64 currentReturned = queryProfile.value(0).toLongLong();
+            qint64 currentModified = queryProfile.value(1).toLongLong();
 
-        if (elapsed > this->latencyBorder) {
-            ui->statusbar->setStyleSheet("color: #C0392B; font-weight: bold; background-color: #FDEDEC;");
-        } else {
-            ui->statusbar->setStyleSheet("color: #2C3E50;");
+            if (prevReturned > 0) {
+                qint64 deltaRead = currentReturned - prevReturned;
+                qint64 deltaWrite = currentModified - prevModified;
+                qint64 totalOperations = deltaRead + deltaWrite;
+
+                if (totalOperations > 0) {
+                    int readPct = static_cast<int>((deltaRead * 100) / totalOperations);
+                    int writePct = static_cast<int>((deltaWrite * 100) / totalOperations);
+
+                    ui->barRead->setValue(readPct);
+                    ui->barWrite->setValue(writePct);
+                } else {
+                    ui->barRead->setValue(0);
+                    ui->barWrite->setValue(0);
+                }
+            }
+
+            prevReturned = currentReturned;
+            prevModified = currentModified;
         }
 
         analizer->addSnapshot(currentTps, currentHitRatio, currentFsyncs, currentLocks, currentRbRate);
@@ -436,7 +463,265 @@ void MainWindow::refreshData()
             ui->expertLog->setStyleSheet("background-color: #EAFAF1; color: #145A32;");
         }
 
+        qint64 elapsed = timer.elapsed();
+        this->setWindowTitle("Система мониторинга PostgreSQL");
+
+        QString statusMessage = QString("Статус: Мониторинг активен | Отклик: %1 мс | Сессий: %2 | Нагрузка: %3 TPS")
+                                    .arg(elapsed)
+                                    .arg(currentConns)
+                                    .arg(currentTps, 0, 'f', 1);
+
         ui->statusbar->showMessage(statusMessage + " | " + analizer->getShortStatus());
+
+        if (elapsed > this->latencyBorder) {
+            ui->statusbar->setStyleSheet("color: #C0392B; font-weight: bold; background-color: #FDEDEC;");
+        } else {
+            ui->statusbar->setStyleSheet("color: #2C3E50;");
+        }
     }
 }
 
+void MainWindow::on_exportToPdfButton_clicked()
+{
+    if (!QSqlDatabase::database().isOpen()) {
+        QMessageBox::warning(this, "Внимание", "Нет активного подключения к СУБД для выгрузки метрик!");
+        return;
+    }
+
+    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
+    QString pdfPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/Расширенный_отчет_" + timestamp + ".pdf";
+
+    QString v_version   = ui->labelVersion->text().section('\n', 1).trimmed();
+    QString v_size      = ui->labelTotalSize->text().section('\n', 1).trimmed();
+    QString v_cache     = ui->labelCache->text().section('\n', 1).trimmed();
+    QString v_tps       = ui->labelTPS->text().section(':', 1).trimmed();
+    QString v_rollback  = ui->labelRollback->text().section(':', 1).trimmed();
+
+    if (v_version.isEmpty()) v_version = "PostgreSQL (Astra Linux SE)";
+    if (v_tps.isEmpty()) v_tps = "0.0";
+    if (v_rollback.isEmpty()) v_rollback = "0.0%";
+
+    int activeConnections = 0;
+    int waitingLocks = 0;
+    qint64 tempFilesBytes = 0;
+    QString sharedBuffersConfig = "Неизвестно";
+
+    QSqlQuery sqlQuery;
+
+    if (sqlQuery.exec("SELECT count(*) FROM pg_stat_activity WHERE state = 'active'")) {
+        if (sqlQuery.next()) activeConnections = sqlQuery.value(0).toInt();
+    }
+
+    if (sqlQuery.exec("SELECT count(*) FROM pg_locks WHERE granted = false")) {
+        if (sqlQuery.next()) waitingLocks = sqlQuery.value(0).toInt();
+    }
+
+    if (sqlQuery.exec("SELECT sum(temp_bytes) FROM pg_stat_database")) {
+        if (sqlQuery.next()) tempFilesBytes = sqlQuery.value(0).toLongLong();
+    }
+    double tempFilesMb = static_cast<double>(tempFilesBytes) / (1024.0 * 1024.0);
+
+    if (sqlQuery.exec("SHOW shared_buffers")) {
+        if (sqlQuery.next()) sharedBuffersConfig = sqlQuery.value(0).toString();
+    }
+
+    QString htmlContent = QString(
+        "<html><head><style>"
+        "body { font-family: 'Liberation Sans', Arial, sans-serif; margin: 10px; color: #2C3E50; line-height: 1.3; }"
+        ".header { text-align: center; border-bottom: 3px solid #2980B9; padding-bottom: 8px; margin-bottom: 15px; }"
+        "h1 { color: #2980B9; font-size: 20px; margin: 0; text-transform: uppercase; }"
+        ".company { font-size: 12px; color: #7F8C8D; margin-top: 4px; font-weight: bold; }"
+        ".date { color: #95A5A6; font-size: 11px; margin-top: 2px; }"
+        "h3 { color: #2C3E50; border-left: 4px solid #2980B9; padding-left: 6px; margin-top: 15px; margin-bottom: 5px; font-size: 13px; text-transform: uppercase; }"
+        ".metric-table { width: 100%; border-collapse: collapse; margin-top: 5px; font-size: 12px; }"
+        ".metric-table th, .metric-table td { border: 1px solid #BDC3C7; padding: 6px; text-align: left; }"
+        ".metric-table th { background-color: #F2F4F4; color: #34495E; font-weight: bold; }"
+        ".verdict-box { background-color: #EAFAF1; border: 1px solid #27AE60; border-left: 6px solid #27AE60; "
+        "                padding: 10px; margin-top: 8px; font-size: 12px; border-radius: 4px; white-space: pre-wrap; }"
+        "</style></head><body>"
+        "<div class='header'>"
+        "  <h1>Технический отчет комплексного monitoring СУБД</h1>"
+        "  <div class='company'>Подсистема контроля транзакционной активности</div>"
+        "  <div class='date'>Дата и время генерации пакета: %1</div>"
+        "</div>"
+        "<h3>1. Идентификация целевой среды</h3>"
+        "<table class='metric-table'>"
+        "  <tr><td style='width: 40%%;'>Версия ядра СУБД</td><td><b>%2</b></td></tr>"
+        "  <tr><td>Контролируемый объем дискового пространства баз</td><td>%3</td></tr>"
+        "  <tr><td>Выделенный объем shared_buffers (конфигурация)</td><td><b>%4</b></td></tr>"
+        "</table>"
+        "<h3>2. Метрики эффективности подсистемы памяти и транзакций</h3>"
+        "<table class='metric-table'>"
+        "  <tr><th style='width: 40%%;'>Контролируемый параметр</th><th>Текущее значение</th><th>Статус</th></tr>"
+        "  <tr><td>Эффективность кэширования строк (Cache Hit Ratio)</td><td>%5</td><td>Штатно</td></tr>"
+        "  <tr><td>Интенсивность транзакционной нагрузки (TPS)</td><td>%6 вызовов/сек</td><td>Под нагрузкой</td></tr>"
+        "  <tr><td>Коэффициент аварийных откатов (Rollback Rate)</td><td>%7</td><td>Штатно</td></tr>"
+        "</table>"
+        "<h3>3. Метрики параллелизма и дисковой подсистемы (I/O)</h3>"
+        "<table class='metric-table'>"
+        "  <tr><th style='width: 40%%;'>Параметр параллелизма / диска</th><th>Текущее значение</th><th>Влияние на производительность</th></tr>"
+        "  <tr><td>Активные сессии (Active Connections)</td><td>%8 параллельных процессов</td><td>Низкое</td></tr>"
+        "  <tr><td>Взаимные блокировки транзакций (Deadlocks/Locks)</td><td><span style='color: %9;'><b>%10 шт.</b></span></td><td>%11</td></tr>"
+        "  <tr><td>Объем генерации Temp Files на диске</td><td>%12 Мб</td><td>%13</td></tr>"
+        "</table>"
+        "<h3>4. Автоматическое экспертное заключение</h3>"
+        "<div class='verdict-box'>"
+        "  %14"
+        "</div>"
+        "</body></html>"
+    )
+    .arg(QDateTime::currentDateTime().toString("dd.MM.yyyy hh:mm:ss"))
+    .arg(v_version)
+    .arg(v_size)
+    .arg(sharedBuffersConfig)
+    .arg(v_cache)
+    .arg(v_tps)
+    .arg(v_rollback)
+    .arg(activeConnections)
+    .arg(waitingLocks > 0 ? "#C0392B" : "#27AE60")
+    .arg(waitingLocks)
+    .arg(waitingLocks > 0 ? "КРИТИЧЕСКОЕ: Требуется оптимизация логики приложений" : "Отсутствует")
+    .arg(QString::number(tempFilesMb, 'f', 2))
+    .arg(tempFilesMb > 50.0 ? "ВНИМАНИЕ: Рекомендуется увеличить work_mem" : "Оптимально")
+    .arg(analizer->getExpertConclusion().replace("\n", "<br>"));
+
+    QPdfWriter pdfWriter(pdfPath);
+    pdfWriter.setPageSize(QPdfWriter::A4);
+    pdfWriter.setPageMargins(QMarginsF(10, 10, 10, 10));
+    pdfWriter.setResolution(96);
+
+    QTextDocument doc;
+    doc.setTextWidth(pdfWriter.width());
+    doc.setHtml(htmlContent);
+    doc.print(&pdfWriter);
+
+    ui->statusbar->showMessage("Отчет успешно сохранен и открыт: " + pdfPath, 5000);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(pdfPath));
+}
+
+void MainWindow::on_aiAnalysisButton_clicked()
+{
+    if (!networkManager) {
+        networkManager = new QNetworkAccessManager(this);
+        connect(networkManager, &QNetworkAccessManager::finished, this, &MainWindow::onAiReplyFinished);
+    }
+
+    QString badgerReportPath = qApp->applicationDirPath() + "/report_badger.html";
+
+    if (!QFile::exists(badgerReportPath)) {
+        QMessageBox::warning(this, "Анализ невозможен", "Сначала необходимо сгенерировать базовый отчет pgBadger!");
+        return;
+    }
+
+    QFile file(badgerReportPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::critical(this, "Ошибка", "Не удалось открыть отчет pgBadger для анализа.");
+        return;
+    }
+
+    QTextStream in(&file);
+    QString htmlContent = in.readAll();
+    file.close();
+
+    ui->statusbar->showMessage("Экстракция признаков из pgBadger и подготовка промпта...");
+
+    QString extractedContext = "Данные из pgBadger:\n";
+    if (htmlContent.contains("slowest", Qt::CaseInsensitive)) extractedContext += "- Обнаружены медленные SQL-запросы (Slowest queries)\n";
+    if (htmlContent.contains("deadlock", Qt::CaseInsensitive)) extractedContext += "- Зафиксированы критические блокировки (Deadlocks/Locks waiting)\n";
+    if (htmlContent.contains("checkpoint", Qt::CaseInsensitive)) extractedContext += "- Высокая частота контрольных точек (Checkpoints)\n";
+    if (htmlContent.contains("fatal", Qt::CaseInsensitive)) extractedContext += "- Ошибки в логах: FATAL/ERROR\n";
+
+    QString prompt = QString(
+        "Ты — ведущий инженер СУБД PostgreSQL на операционной системе Astra Linux. "
+        "Проанализируй следующие агрегированные результаты утилиты pgBadger и сформируй "
+        "краткое экспертное заключение и конкретные рекомендации по тюнингу конфигурационного файла postgresql.conf.\n\n"
+        "Входные данные отчета:\n%1\n"
+        "Ответь строго на русском языке, профессионально, кратко и по пунктам."
+    ).arg(extractedContext);
+
+    QJsonObject json;
+    json["model"] = "llama3:latest";
+    json["prompt"] = prompt;
+    json["stream"] = false;
+
+    QJsonDocument doc(json);
+    QByteArray data = doc.toJson();
+
+    QUrl url("http://127.0.0.1:11434/api/generate");
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+
+    ui->statusbar->showMessage("Ожидание ответа от локальной LLM-модели...");
+    ui->expertLog->setText("ИИ думает... Пожалуйста, подождите.");
+    ui->expertLog->setStyleSheet("background-color: #FCF3CF; color: #7E5109; font-family: Consolas;");
+
+    ui->aiAnalysisButton->setEnabled(false);
+    networkManager->post(request, data);
+}
+
+void MainWindow::onAiReplyFinished(QNetworkReply *reply)
+{
+    ui->statusbar->showMessage("Мониторинг активен");
+    ui->aiAnalysisButton->setEnabled(true);
+
+    if (!reply) return;
+
+    if (reply->error() == QNetworkReply::NoError) {
+        QByteArray responseBytes = reply->readAll();
+        QJsonDocument jsonDoc = QJsonDocument::fromJson(responseBytes);
+        QJsonObject jsonObj = jsonDoc.object();
+
+        QString result = jsonObj["response"].toString();
+
+        ui->expertLog->setStyleSheet("background-color: #f0f0f0; color: #333; font-family: Consolas;");
+        ui->expertLog->setText("Анализ успешно завершен. Отчет открыт в отдельном окне.");
+
+        QDialog *reportDialog = new QDialog(this);
+        reportDialog->setWindowTitle("Экспертное заключение ИИ (Llama 3)");
+        reportDialog->setMinimumSize(750, 550);
+
+        QTextEdit *textEdit = new QTextEdit(reportDialog);
+        textEdit->setReadOnly(true);
+
+        QString htmlFormatted = result;
+        QRegularExpression rx("\\*\\*(.*?)\\*\\*");
+        htmlFormatted.replace(rx, "<b>\\1</b>");
+        htmlFormatted.replace("\n", "<br>");
+
+        textEdit->setHtml(htmlFormatted);
+
+        textEdit->setStyleSheet(
+            "QTextEdit {"
+            "   font-family: 'Consolas', 'Courier New', monospace;"
+            "   font-size: 11pt;"
+            "   color: #222222;"
+            "   background-color: #ffffff;"
+            "   border: 1px solid #ccc;"
+            "   padding: 10px;"
+            "}"
+        );
+
+        QPushButton *closeButton = new QPushButton("Понятно", reportDialog);
+        closeButton->setStyleSheet("padding: 6px 20px; font-weight: bold;");
+        connect(closeButton, &QPushButton::clicked, reportDialog, &QDialog::accept);
+
+        QVBoxLayout *mainLayout = new QVBoxLayout(reportDialog);
+        mainLayout->addWidget(textEdit);
+
+        QHBoxLayout *buttonLayout = new QHBoxLayout();
+        buttonLayout->addStretch();
+        buttonLayout->addWidget(closeButton);
+
+        mainLayout->addLayout(buttonLayout);
+        reportDialog->setLayout(mainLayout);
+
+        reportDialog->exec();
+        reportDialog->deleteLater();
+    } else {
+        ui->expertLog->setStyleSheet("background-color: #ffcccc; color: #cc0000;");
+        ui->expertLog->setText("Ошибка сети при получении анализа от ИИ.");
+        QMessageBox::critical(this, "Ошибка сети", "Не удалось получить ответ от локальной модели Ollama: " + reply->errorString());
+    }
+
+    reply->deleteLater();
+}

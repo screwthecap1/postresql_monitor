@@ -4,6 +4,13 @@
 #include <QMainWindow>
 #include <QTextEdit>
 #include <QTimer>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QProgressBar>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include "db_analizer.h"
 
 QT_BEGIN_NAMESPACE
@@ -25,6 +32,9 @@ private slots:
     void on_exportButton_clicked();
     void on_badgerButton_clicked();
     void on_launchButton_clicked();
+    void on_exportToPdfButton_clicked();
+    void on_aiAnalysisButton_clicked();
+    void onAiReplyFinished(QNetworkReply *reply);
 
 private:
     Ui::MainWindow *ui;
@@ -33,5 +43,6 @@ private:
     int latencyBorder;
     double cacheBorder;
     DbAnalizer *analizer;
+    QNetworkAccessManager *networkManager;
 };
 #endif // MAINWINDOW_H
